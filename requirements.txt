@@ -3,3 +3,4 @@ flask-cors
 psycopg2
 argon2-cffi
 flask-sqlalchemy
+gunicorn
