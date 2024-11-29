@@ -140,6 +140,76 @@ def register():
        cursor.close()
        connection.close()
 
+@app.route('/employees', methods=['GET'])
+def get_employees():
+    """
+    Fetch all rows from the employee table.
+    """
+    if not check_api_key():
+        return jsonify({"status": "error", "message": "Invalid API Key"}), 403
+
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    try:
+        # Query to fetch all employees
+        cursor.execute('SELECT id, name, age, department, position, address, employee_id FROM employee')
+        rows = cursor.fetchall()
+
+        # Convert rows into a list of dictionaries
+        employees = [
+            {
+                'id': row[0],
+                'name': row[1],
+                'age': row[2],
+                'department': row[3],
+                'position': row[4],
+                'address': row[5],
+                'employee_id': row[6]
+            }
+            for row in rows
+        ]
+
+        return jsonify({'status': 'success', 'employees': employees}), 200
+    finally:
+        cursor.close()
+        connection.close()
+
+
+@app.route('/employee/<int:id>', methods=['GET'])
+def get_employee_by_id(id):
+    """
+    Fetch a single employee by ID.
+    """
+    if not check_api_key():
+        return jsonify({"status": "error", "message": "Invalid API Key"}), 403
+
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    try:
+        # Query to fetch the employee by ID
+        cursor.execute('SELECT id, name, age, department, position, address, employee_id FROM employee WHERE id = %s', (id,))
+        row = cursor.fetchone()
+
+        if not row:
+            return jsonify({'status': 'error', 'message': 'Employee not found'}), 404
+
+        # Convert the row into a dictionary
+        employee = {
+            'id': row[0],
+            'name': row[1],
+            'age': row[2],
+            'department': row[3],
+            'position': row[4],
+            'address': row[5],
+            'employee_id': row[6]
+        }
+
+        return jsonify({'status': 'success', 'employee': employee}), 200
+    finally:
+        cursor.close()
+        connection.close()
 
 if __name__ == '__main__':
    app.run(debug=True, host='0.0.0.0', port=5000)
