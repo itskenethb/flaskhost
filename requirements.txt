@@ -1,6 +1,11 @@
+psycopg2
+face_recognition
+opencv-python
+numpy
+tk
+pillow
 Flask
 flask-cors
-psycopg2
-argon2-cffi
-flask-sqlalchemy
+ultralytics
+cvzone
 gunicorn
