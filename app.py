@@ -900,93 +900,173 @@ def get_attendance(period):
 @app.route('/employee_summary', methods=['GET'])
 @require_api_key
 def get_employee_summary():
-    department = request.args.get('department')
+   department = request.args.get('department')
+   timeframe = request.args.get('timeframe', 'weekly')  # Default to weekly if no timeframe is provided
 
-    if not department:
-        return jsonify({"error": "Department parameter is required"}), 400
 
-    print(f"Filtering by department: {department}")  # Log the department received
+   if not department:
+       return jsonify({"error": "Department parameter is required"}), 400
 
-    query = """
-    WITH current_day_metrics AS (
-        SELECT 
-            fe.department,
-            COUNT(fe.id) AS total_employee_count,
-            COUNT(es.id) AS on_leave_count,
-            COUNT(CASE WHEN att.id IS NOT NULL THEN 1 END) AS present_employee_count
-        FROM public.face_encodings fe
-        LEFT JOIN public.employee_status es
-            ON fe.id = es.id 
-            AND es.on_leave = true 
-            AND es.leave_end_date >= CURRENT_DATE
-        LEFT JOIN public.attendance att
-            ON fe.id = att.id 
-            AND DATE(att.in_time) = CURRENT_DATE
-        WHERE fe.department = %s
-        GROUP BY fe.department
-    ),
-    employee_attendance AS (
-        SELECT
-            fe.department,
-            fe.id AS employee_id,
-            fe.name AS employee_name,
-            COUNT(CASE WHEN att.id IS NOT NULL THEN 1 END) AS present_days_count,
-            EXTRACT(DOW FROM CURRENT_DATE) AS current_week_day_count
-        FROM public.face_encodings fe
-        LEFT JOIN public.attendance att
-            ON fe.id = att.id
-            AND att.in_time >= DATE_TRUNC('week', CURRENT_DATE)
-        WHERE fe.department = %s
-        GROUP BY fe.department, fe.id, fe.name
-    )
-    SELECT 
-        e.department,
-        e.employee_id,
-        e.employee_name,
-        e.present_days_count,
-        e.current_week_day_count,
-        ROUND((e.present_days_count * 100.0) / e.current_week_day_count, 2) AS attendance_percentage
-    FROM employee_attendance e
-    JOIN current_day_metrics cdm 
-        ON e.department = cdm.department
-    ORDER BY e.employee_id;
-    """
 
-    try:
-        # Connect to the database
-        conn = get_db_connection()
-        cursor = conn.cursor()
+   if timeframe not in ['weekly', 'monthly']:
+       return jsonify({"error": "Invalid timeframe parameter. Use 'weekly' or 'monthly'."}), 400
 
-        # Log the department and query for debugging
-        print(f"Executing query with department: {department}")
-        cursor.execute(query, (department, department))  # Pass department twice
-        result = cursor.fetchall()
 
-        # If no data is found, return an appropriate message
-        if not result:
-            return jsonify({"message": f"No data found for department '{department}'"}), 404
+   print(f"Filtering by department: {department} and timeframe: {timeframe}")  # Log the department and timeframe
 
-        # Format the result into JSON and return
-        response = []
-        for row in result:
-            response.append({
-                "department": row[0],
-                "employee_id": row[1],
-                "employee_name": row[2],
-                "present_days_count": row[3],
-                "current_week_day_count": row[4],
-                "attendance_percentage": row[5]
-            })
 
-        return jsonify(response)
+   # Weekly query
+   weekly_query = """
+   WITH current_day_metrics AS (
+       SELECT
+           fe.department,
+           COUNT(fe.id) AS total_employee_count,
+           COUNT(es.id) AS on_leave_count,
+           COUNT(CASE WHEN att.id IS NOT NULL THEN 1 END) AS present_employee_count
+       FROM public.face_encodings fe
+       LEFT JOIN public.employee_status es
+           ON fe.id = es.id
+           AND es.on_leave = true
+           AND es.leave_end_date >= CURRENT_DATE
+       LEFT JOIN public.attendance att
+           ON fe.id = att.id
+           AND DATE(att.in_time) = CURRENT_DATE
+       WHERE fe.department = %s
+       GROUP BY fe.department
+   ),
+   employee_attendance AS (
+       SELECT
+           fe.department,
+           fe.id AS employee_id,
+           fe.name AS employee_name,
+           COUNT(CASE WHEN att.id IS NOT NULL THEN 1 END) AS present_days_count,
+           EXTRACT(DOW FROM CURRENT_DATE) AS current_week_day_count
+       FROM public.face_encodings fe
+       LEFT JOIN public.attendance att
+           ON fe.id = att.id
+           AND att.in_time >= DATE_TRUNC('week', CURRENT_DATE)
+       WHERE fe.department = %s
+       GROUP BY fe.department, fe.id, fe.name
+   )
+   SELECT
+       e.department,
+       e.employee_id,
+       e.employee_name,
+       e.present_days_count,
+       e.current_week_day_count,
+       ROUND((e.present_days_count * 100.0) / e.current_week_day_count, 2) AS attendance_percentage
+   FROM employee_attendance e
+   JOIN current_day_metrics cdm
+       ON e.department = cdm.department
+   ORDER BY e.employee_id;
+   """
 
-    except Exception as e:
-        print(f"Error executing query: {str(e)}")  # Log any exception
-        return jsonify({"error": str(e)}), 500
 
-    finally:
-        cursor.close()
-        conn.close()
+   # Monthly query
+   monthly_query = """
+   WITH current_month_metrics AS (
+       SELECT
+           fe.department,
+           COUNT(fe.id) AS total_employee_count,
+           COUNT(es.id) AS on_leave_count,
+           COUNT(CASE WHEN att.id IS NOT NULL THEN 1 END) AS present_employee_count
+       FROM public.face_encodings fe
+       LEFT JOIN public.employee_status es
+           ON fe.id = es.id
+           AND es.on_leave = true
+           AND es.leave_end_date >= CURRENT_DATE
+       LEFT JOIN public.attendance att
+           ON fe.id = att.id
+           AND DATE(att.in_time) >= DATE_TRUNC('month', CURRENT_DATE)
+           AND DATE(att.in_time) < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 MONTH'
+       WHERE fe.department = %s
+       GROUP BY fe.department
+   ),
+   employee_attendance AS (
+       SELECT
+           fe.department,
+           fe.id AS employee_id,
+           fe.name AS employee_name,
+           COUNT(DISTINCT DATE(att.in_time)) AS present_days_count,
+           COUNT(DISTINCT CASE
+               WHEN EXTRACT(DOW FROM DATE(att.in_time)) BETWEEN 1 AND 5 -- weekdays (Mon-Fri)
+               THEN DATE(att.in_time)
+               END) AS total_working_days_count
+       FROM public.face_encodings fe
+       LEFT JOIN public.attendance att
+           ON fe.id = att.id
+           AND att.in_time >= DATE_TRUNC('month', CURRENT_DATE)
+           AND att.in_time < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 MONTH'
+       WHERE fe.department = %s
+       GROUP BY fe.department, fe.id, fe.name
+   ),
+   working_days_in_month AS (
+       SELECT
+           COUNT(DISTINCT DATE) AS total_working_days
+       FROM generate_series(DATE_TRUNC('month', CURRENT_DATE), CURRENT_DATE, '1 day'::interval) AS DATE
+       WHERE EXTRACT(DOW FROM DATE) BETWEEN 1 AND 5 -- Monday to Friday
+   )
+   SELECT
+       e.department,
+       e.employee_id,
+       e.employee_name,
+       e.present_days_count,
+       w.total_working_days,
+       ROUND((e.present_days_count * 100.0) / w.total_working_days, 2) AS attendance_percentage
+   FROM employee_attendance e
+   JOIN working_days_in_month w ON true
+   ORDER BY e.employee_id;
+   """
+
+
+   # Select the correct query based on timeframe
+   query = weekly_query if timeframe == 'weekly' else monthly_query
+
+
+   try:
+       # Connect to the database
+       conn = get_db_connection()
+       cursor = conn.cursor()
+
+
+       # Log the department, timeframe, and query for debugging
+       print(f"Executing {timeframe} query with department: {department}")
+       cursor.execute(query, (department, department))  # Pass department twice
+       result = cursor.fetchall()
+
+
+       # If no data is found, return an appropriate message
+       if not result:
+           return jsonify({"message": f"No data found for department '{department}'"}), 404
+
+
+       # Format the result into JSON and return
+       response = []
+       for row in result:
+           response.append({
+               "department": row[0],
+               "employee_id": row[1],
+               "employee_name": row[2],
+               "present_days_count": row[3],
+               "total_working_days_count": row[4] if timeframe == 'monthly' else row[4],
+               "attendance_percentage": row[5]
+           })
+
+
+       return jsonify(response)
+
+
+   except Exception as e:
+       print(f"Error executing query: {str(e)}")  # Log any exception
+       return jsonify({"error": str(e)}), 500
+
+
+   finally:
+       cursor.close()
+       conn.close()
+
+
+
 
 if __name__ == '__main__':
     app.run(debug=True)
