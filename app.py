@@ -760,54 +760,119 @@ def late_count_report():
 @require_api_key
 def get_attendance(period):
     """
-    Fetch attendance count per department for a specified period (weekly, monthly).
+    Fetch attendance count per department for a specified period (weekly, monthly, annual).
     """
     connection = get_db_connection()
     cursor = connection.cursor()
 
     try:
-       
         if period == 'weekly':
             date_condition = "EXTRACT(week FROM a.in_time) = EXTRACT(week FROM CURRENT_DATE)"
+            query = """
+            WITH employee_attendance AS (
+                SELECT
+                    fe.department,
+                    fe.id AS employee_id,
+                    COUNT(CASE WHEN att.id IS NOT NULL THEN 1 END) AS present_days_count,
+                    EXTRACT(DOW FROM CURRENT_DATE) AS current_week_day_count
+                FROM public.face_encodings fe
+                LEFT JOIN public.attendance att
+                    ON fe.id = att.id
+                    AND att.in_time >= DATE_TRUNC('week', CURRENT_DATE)
+                GROUP BY fe.department, fe.id
+            ),
+            department_attendance AS (
+                SELECT 
+                    e.department,
+                    SUM((e.present_days_count * 100.0) / e.current_week_day_count) AS total_attendance_percentage,
+                    COUNT(e.employee_id) AS department_employee_count
+                FROM employee_attendance e
+                GROUP BY e.department
+            )
+            SELECT 
+                e.department,
+                ROUND(da.total_attendance_percentage / da.department_employee_count, 2) AS department_attendance_percentage
+            FROM department_attendance da
+            JOIN employee_attendance e
+                ON e.department = da.department
+            GROUP BY e.department, da.total_attendance_percentage, da.department_employee_count
+            ORDER BY e.department;
+            """
+        
         elif period == 'monthly':
             date_condition = "a.in_time >= NOW() - INTERVAL '1 month'"
+            query = """
+            WITH employee_attendance AS (
+                SELECT
+                    fe.department,
+                    fe.id AS employee_id,
+                    DATE_TRUNC('week', att.in_time) AS week_start,
+                    COUNT(CASE WHEN att.id IS NOT NULL THEN 1 END) AS present_days_count,
+                    7 AS current_week_day_count -- Assuming a standard week of 7 days
+                FROM public.face_encodings fe
+                LEFT JOIN public.attendance att
+                    ON fe.id = att.id
+                    AND att.in_time >= DATE_TRUNC('month', CURRENT_DATE) -- Filter for the current month
+                GROUP BY fe.department, fe.id, DATE_TRUNC('week', att.in_time)
+            ),
+            weekly_department_attendance AS (
+                SELECT 
+                    e.department,
+                    e.week_start,
+                    SUM((e.present_days_count * 100.0) / e.current_week_day_count) AS weekly_attendance_percentage,
+                    COUNT(e.employee_id) AS department_employee_count
+                FROM employee_attendance e
+                GROUP BY e.department, e.week_start
+            ),
+            monthly_department_attendance AS (
+                SELECT 
+                    wda.department,
+                    SUM(wda.weekly_attendance_percentage) / COUNT(wda.week_start) AS monthly_attendance_percentage
+                FROM weekly_department_attendance wda
+                GROUP BY wda.department
+            )
+            SELECT 
+                mda.department,
+                ROUND(mda.monthly_attendance_percentage, 2) AS department_monthly_attendance_percentage
+            FROM monthly_department_attendance mda
+            ORDER BY mda.department;
+            """
+
         elif period == 'annual':
             date_condition = "a.in_time >= NOW() - INTERVAL '1 year'"
+            query = """
+            WITH employee_attendance AS (
+                SELECT
+                    fe.department,
+                    fe.id AS employee_id,
+                    COUNT(CASE WHEN att.id IS NOT NULL THEN 1 END) AS present_days_count,
+                    EXTRACT(DOW FROM CURRENT_DATE) AS current_week_day_count
+                FROM public.face_encodings fe
+                LEFT JOIN public.attendance att
+                    ON fe.id = att.id
+                    AND att.in_time >= DATE_TRUNC('year', CURRENT_DATE)
+                GROUP BY fe.department, fe.id
+            ),
+            department_attendance AS (
+                SELECT 
+                    e.department,
+                    SUM((e.present_days_count * 100.0) / e.current_week_day_count) AS total_attendance_percentage,
+                    COUNT(e.employee_id) AS department_employee_count
+                FROM employee_attendance e
+                GROUP BY e.department
+            )
+            SELECT 
+                e.department,
+                ROUND(da.total_attendance_percentage / da.department_employee_count, 2) AS department_attendance_percentage
+            FROM department_attendance da
+            JOIN employee_attendance e
+                ON e.department = da.department
+            GROUP BY e.department, da.total_attendance_percentage, da.department_employee_count
+            ORDER BY e.department;
+            """
+
         else:
             return jsonify({'status': 'error', 'message': 'Invalid period. Use weekly, monthly, or annual.'}), 400
-
-        # Query to fetch attendance count per department for the specified period
-        query = f"""
-        WITH employee_attendance AS (
-    SELECT
-        fe.department,
-        fe.id AS employee_id,
-        COUNT(CASE WHEN att.id IS NOT NULL THEN 1 END) AS present_days_count,
-        EXTRACT(DOW FROM CURRENT_DATE) AS current_week_day_count
-    FROM public.face_encodings fe
-    LEFT JOIN public.attendance att
-        ON fe.id = att.id
-        AND att.in_time >= DATE_TRUNC('week', CURRENT_DATE)
-    GROUP BY fe.department, fe.id
-),
-department_attendance AS (
-    SELECT 
-        e.department,
-        SUM((e.present_days_count * 100.0) / e.current_week_day_count) AS total_attendance_percentage,
-        COUNT(e.employee_id) AS department_employee_count
-    FROM employee_attendance e
-    GROUP BY e.department
-)
-SELECT 
-    e.department,
-    ROUND(da.total_attendance_percentage / da.department_employee_count, 2) AS department_attendance_percentage
-FROM department_attendance da
-JOIN employee_attendance e
-    ON e.department = da.department
-GROUP BY e.department, da.total_attendance_percentage, da.department_employee_count
-ORDER BY e.department;
-
-        """
 
         cursor.execute(query)
         rows = cursor.fetchall()
@@ -829,6 +894,7 @@ ORDER BY e.department;
     finally:
         cursor.close()
         connection.close()
+
 
 #EMPLOYEE GRAPH
 @app.route('/employee_summary', methods=['GET'])
